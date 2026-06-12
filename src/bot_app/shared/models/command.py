@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from pydantic import BaseModel
 
 
 class Command(BaseModel):
     name: str
-    args: List[str]
+    args: list[str]
     raw_text: str
     chat_id: int
     update_id: int

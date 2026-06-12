@@ -18,8 +18,11 @@ Designed for selling **physical or digital products** through a Telegram bot, wi
 | 🌐 | i18n via `aiogram_i18n` + Fluent (id default, en, ru shipped) |
 | 💱 | Money stored as integer smallest units (cents) per row, single currency per order |
 | 👮 | Admin surface via bot commands + FSM (categories, products, orders, broadcast) |
+| 🛡️ | **Per-user rate limiter** (token-bucket), request-ID correlation, global error handler |
+| 📊 | Structured logging (structlog) + Sentry integration |
 | 🚀 | Polling (default) and Webhook deployment modes |
-| 🐳 | One-command `make up` Docker Compose (bot + postgres + redis) |
+| 🛑 | Graceful shutdown (SIGINT/SIGTERM) with engine.dispose() |
+| 🐳 | One-command `make up` Docker Compose (bot + postgres + redis, healthchecks) |
 | 🧪 | pytest + pytest-asyncio + coverage |
 | 🧹 | ruff + mypy strict + pre-commit |
 
@@ -66,11 +69,12 @@ Send `/start` to your bot — you should see the welcome message.
 
 ```
 src/bot_app/
-├── main.py             # entry: polling or webhook
-├── bootstrap.py        # wiring + DI registration
-├── core/               # config, logging, errors
+├── main.py             # entry: polling or webhook, graceful shutdown
+├── bootstrap.py        # wiring + DI registration + middleware
+├── core/               # config (validators), logging, errors
 ├── shared/             # enums, money, DTOs, protocols
 ├── infrastructure/     # persistence, telegram, fsm, i18n, payments
+├── middleware/          # request-id, rate-limit, error-handler (Phase 5)
 ├── app/                # cross-feature services, routing, polling
 └── features/           # domain features (one folder per concern)
     ├── start/          # /start, /help, /lang
@@ -101,6 +105,11 @@ All settings live in `.env` (see `.env.example`). Key values:
 | `PAYMENT_PROVIDERS` | `provider_token` | comma-separated list |
 | `PROVIDER_TOKEN` | — | from a Telegram Payments partner |
 | `ADMINS` | — | comma-separated telegram user ids |
+| `RATE_LIMIT_PER_SECOND` | `1.0` | tokens added per second per user |
+| `RATE_LIMIT_BURST` | `5` | max burst per user |
+| `SENTRY_DSN` | — | optional Sentry DSN for error tracking |
+| `ALLOWED_UPDATES` | `message,callback_query,pre_checkout_query` | update types to receive |
+| `GRACEFUL_SHUTDOWN_TIMEOUT` | `10` | seconds |
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 
@@ -125,7 +134,7 @@ make test            # pytest with coverage
 - [ ] **Phase 2** — Catalog, cart, i18n
 - [ ] **Phase 3** — Checkout + provider-token payments + stock-war protection
 - [ ] **Phase 4** — Admin surface
-- [ ] **Phase 5** — Hardening (Redis FSM, structlog, Docker, error handlers)
+- [x] **Phase 5** — Hardening (Redis FSM, structlog, Docker, error handlers, rate limiter)
 - [ ] **Phase 6** — v1.1 (FastAPI admin panel, YooKassa, CryptoBot, discounts, webhooks)
 
 See [PLAN.md](docs/PLAN.md) for the full implementation plan.

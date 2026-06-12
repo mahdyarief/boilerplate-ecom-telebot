@@ -8,7 +8,6 @@ reference implementation of the ``TelegramGateway`` protocol.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
 import aiohttp
 
@@ -25,7 +24,7 @@ class HttpTelegramGateway(TelegramGateway):
 
     def __init__(self) -> None:
         self._base_url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}"
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -34,7 +33,7 @@ class HttpTelegramGateway(TelegramGateway):
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
-    async def get_updates(self, offset: Optional[int] = None) -> List[Update]:
+    async def get_updates(self, offset: int | None = None) -> list[Update]:
         params: dict = {"timeout": settings.POLLING_TIMEOUT}
         if offset is not None:
             params["offset"] = offset

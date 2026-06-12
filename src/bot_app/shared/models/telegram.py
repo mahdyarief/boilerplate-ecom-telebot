@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -11,31 +9,31 @@ class User(BaseModel):
     id: int
     is_bot: bool = False
     first_name: str = ""
-    last_name: Optional[str] = None
-    username: Optional[str] = None
+    last_name: str | None = None
+    username: str | None = None
 
 
 class Chat(BaseModel):
     id: int
     type: str = "private"
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    username: Optional[str] = None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
 
 
 class Message(BaseModel):
     message_id: int
-    from_user: Optional[User] = Field(None, alias="from")
+    from_user: User | None = Field(None, alias="from")
     chat: Chat
     date: int = 0
-    text: Optional[str] = None
+    text: str | None = None
 
 
 class Update(BaseModel):
     update_id: int
-    message: Optional[Message] = None
+    message: Message | None = None
 
 
 class UpdatesResponse(BaseModel):
     ok: bool
-    result: List[Update]
+    result: list[Update]

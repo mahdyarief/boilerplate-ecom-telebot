@@ -1,1 +1,5 @@
-"""Admin feature — gated CRUD + broadcast. Implemented in Phase 4."""
+"""Admin feature — gated CRUD + broadcast."""
+
+from .router import router
+
+__all__ = ["router"]

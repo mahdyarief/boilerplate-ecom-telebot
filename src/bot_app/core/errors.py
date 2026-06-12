@@ -29,3 +29,11 @@ class StockError(BotError):
 
 class NotFoundError(BotError):
     """Raised when a requested resource does not exist."""
+
+
+class RateLimitError(BotError):
+    """Raised when a user exceeds the rate limit."""
+
+
+class CouponError(BotError):
+    """Raised when a coupon cannot be redeemed (invalid, expired, exhausted)."""

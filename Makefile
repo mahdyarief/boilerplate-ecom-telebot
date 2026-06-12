@@ -16,7 +16,8 @@ export PYTHONPATH := src
 .DEFAULT_GOAL := help
 
 .PHONY: help install sync run check-imports lint format type test \
-        migrate-new migrate-up migrate-down seed up down logs shell clean
+        migrate-new migrate-up migrate-down seed up down logs shell clean \
+        docker-build docker-up docker-down healthcheck
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -82,6 +83,18 @@ logs: ## tail bot logs
 
 shell: ## open a shell in the bot container
 	docker compose exec bot /app/.venv/bin/python
+
+docker-build: ## build the Docker image
+	docker compose build
+
+docker-up: ## start the full stack (alias for up)
+	$(MAKE) up
+
+docker-down: ## stop the full stack (alias for down)
+	$(MAKE) down
+
+healthcheck: ## verify the bot container passes its healthcheck
+	docker compose exec bot python scripts/healthcheck.py
 
 clean: ## remove caches and venv
 	rm -rf $(VENV) .pytest_cache .ruff_cache .mypy_cache src/**/__pycache__

@@ -1,1 +1,1 @@
-"""Checkout feature — shipping FSM → invoice. Implemented in Phase 3."""
+"""Checkout feature — shipping FSM → invoice. Phase 3 ✓."""

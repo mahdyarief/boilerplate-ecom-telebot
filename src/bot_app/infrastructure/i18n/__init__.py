@@ -1,27 +1,27 @@
-"""Internationalisation setup (aiogram-i18n + Fluent).
+"""Internationalisation — lightweight dict-based i18n system.
 
-Phase 0 provides the wiring; actual translation files live in ``locales/``.
+Phase 6 replaces the Phase 0 stub with a working implementation:
+
+- ``translations.py`` — translation dictionaries for ``id`` / ``en``
+  and the ``t(key, lang)`` lookup function.
+- ``middleware.py`` — ``LanguageMiddleware`` that injects the user's
+  language preference into handler data.
+
+Usage in handlers::
+
+    from ...infrastructure.i18n import t
+
+    text = t("cart.empty", data["lang"])
+
+Usage in text formatters::
+
+    from ...infrastructure.i18n import t
+
+    def fmt_empty_cart(lang: str) -> str:
+        return t("cart.empty", lang)
 """
 
-from __future__ import annotations
+from .middleware import LanguageMiddleware
+from .translations import available_languages, t
 
-from pathlib import Path
-
-from aiogram_i18n import I18nContext, LazyProxy
-
-from ...core.config import settings
-
-__all__ = ["setup_i18n", "LazyProxy"]
-
-_LOCALES_DIR = Path(__file__).resolve().parents[3] / "locales"
-
-
-def setup_i18n() -> I18nContext:  # type: ignore[misc]
-    """Create and return an ``I18nContext`` (stub for Phase 0).
-
-    At Phase 0 we do not wire the i18n middleware yet — we only expose
-    ``LazyProxy`` so that handlers can already use ``_("text")`` without
-    breaking.  Full middleware wiring comes in Phase 2.
-    """
-    # Minimal stub: just set the default locale
-    return I18nContext(locale=settings.LANGUAGE)  # type: ignore[call-arg]
+__all__ = ["LanguageMiddleware", "available_languages", "t"]

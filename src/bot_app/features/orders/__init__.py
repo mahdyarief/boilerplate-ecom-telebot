@@ -1,1 +1,1 @@
-"""Orders feature — user order history. Implemented in Phase 3."""
+"""Orders feature — user order history, detail, cancellation. Phase 3 ✓."""

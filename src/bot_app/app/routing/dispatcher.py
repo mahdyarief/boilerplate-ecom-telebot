@@ -8,7 +8,6 @@ used to pull updates.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from ...shared.models.telegram import Update
 from ...shared.protocols.telegram_gateway import TelegramGateway

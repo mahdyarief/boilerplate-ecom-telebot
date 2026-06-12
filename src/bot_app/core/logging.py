@@ -9,11 +9,20 @@ import structlog
 from .config import settings
 
 
-def setup_logging() -> None:
-    """Configure structlog + stdlib logging once at startup."""
+def setup_logging(level: str | None = None) -> None:
+    """Configure structlog + stdlib logging once at startup.
+
+    Parameters
+    ----------
+    level:
+        Optional log level string (e.g. ``"DEBUG"``).  Defaults to
+        ``settings.LOG_LEVEL``.
+    """
+    log_level = level or settings.LOG_LEVEL
+
     logging.basicConfig(
         format="%(message)s",
-        level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+        level=getattr(logging, log_level.upper(), logging.INFO),
     )
 
     structlog.configure(
@@ -26,7 +35,8 @@ def setup_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.UnicodeDecoder(),
-            structlog.processors.render_to_json if settings.USE_WEBHOOK
+            structlog.processors.render_to_json
+            if settings.USE_WEBHOOK
             else structlog.dev.ConsoleRenderer(),
         ],
         context_class=dict,

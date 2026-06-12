@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class CommandName(str, Enum):
+class CommandName(StrEnum):
     """Bot command names — SSOT for command strings."""
 
     START = "/start"
@@ -18,7 +18,7 @@ class CommandName(str, Enum):
     ADMIN = "/admin"
 
 
-class OrderStatus(str, Enum):
+class OrderStatus(StrEnum):
     PENDING = "pending"
     AWAITING_PAYMENT = "awaiting_payment"
     PAID = "paid"
@@ -27,8 +27,15 @@ class OrderStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class PaymentStatus(str, Enum):
+class PaymentStatus(StrEnum):
     PENDING = "pending"
     SUCCESS = "success"
     FAILED = "failed"
     REFUNDED = "refunded"
+
+
+class CouponStatus(StrEnum):
+    ACTIVE = "active"
+    EXHAUSTED = "exhausted"
+    EXPIRED = "expired"
+    DISABLED = "disabled"

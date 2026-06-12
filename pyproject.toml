@@ -13,22 +13,23 @@ dependencies = [
     # ── persistence ─────────────────────────────────────
     "sqlalchemy[asyncio]>=2.0.30,<3",
     "alembic>=1.13,<2",
-    "psycopg[binary]>=3.2,<4",
+    "psycopg[binary]>=3.2,<5",
     "aiosqlite>=0.20,<1",
     # ── settings / validation ────────────────────────────
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.4,<3",
     "python-dotenv>=1.0,<2",
     # ── fsm + cache ──────────────────────────────────────
-    "redis>=5.0,<6",
-    "aiogram-fsm-storage-redis>=1.1,<2",
+    "redis>=5.0,<9",
     # ── i18n ─────────────────────────────────────────────
     "aiogram-i18n>=1.4,<2",
     "babel>=2.16,<3",
     # ── observability ────────────────────────────────────
-    "structlog>=24.1,<25",
+    "structlog>=24.1,<27",
     # ── aiohttp server (for webhook) ─────────────────────
     "aiohttp>=3.10,<4",
+    # ── error tracking ───────────────────────────────────
+    "sentry-sdk>=2.0,<3",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,9 @@
-"""Redis-backed FSM storage builder (requires ``redis`` package)."""
+"""Redis-backed FSM storage builder (aiogram 3 built-in).
+
+Aiogram 3.x ships with ``aiogram.fsm.storage.redis.RedisStorage`` which
+wraps ``redis.asyncio``.  No separate ``aiogram-fsm-storage-redis`` package
+is needed.
+"""
 
 from __future__ import annotations
 

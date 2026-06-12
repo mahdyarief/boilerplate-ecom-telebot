@@ -1,6 +1,8 @@
 import pytest
+
 from src.bot_app.app.routing.parser import parse_update
-from src.bot_app.shared.models.telegram import Update, Message, Chat
+from src.bot_app.shared.models.telegram import Chat, Message, Update
+
 
 def test_parse_valid_command():
     update = Update(
@@ -12,9 +14,9 @@ def test_parse_valid_command():
             text="/echo hello world"
         )
     )
-    
+
     command = parse_update(update)
-    
+
     assert command.name == "/echo"
     assert command.args == ["hello", "world"]
     assert command.raw_text == "hello world"
@@ -31,9 +33,9 @@ def test_parse_command_no_args():
             text="/ping"
         )
     )
-    
+
     command = parse_update(update)
-    
+
     assert command.name == "/ping"
     assert command.args == []
     assert command.raw_text == ""
