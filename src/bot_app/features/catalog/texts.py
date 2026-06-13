@@ -6,6 +6,7 @@ These are intentionally trivial so the router layer stays thin.
 
 from __future__ import annotations
 
+from ...infrastructure.i18n.translations import t
 from ...shared.money import Money
 
 
@@ -14,20 +15,13 @@ def fmt_product_detail(
     price: Money,
     stock: int,
     description: str | None = None,
+    *,
+    lang: str = "id",
 ) -> str:
     """Build the product-detail message text."""
     if description:
-        return (
-            f"📦 {name}\n\n"
-            f"{description}\n\n"
-            f"💰 Harga: {price.format()}\n"
-            f"📦 Stok: {stock}"
-        )
-    return (
-        f"📦 {name}\n\n"
-        f"💰 Harga: {price.format()}\n"
-        f"📦 Stok: {stock}"
-    )
+        return t("catalog.product_detail", lang, name=name, description=description, price=price.format(), stock=stock)
+    return t("catalog.product_no_desc", lang, name=name, price=price.format(), stock=stock)
 
 
 def fmt_cart_item_line(name: str, qty: int, subtotal: Money) -> str:
@@ -38,19 +32,21 @@ def fmt_cart_item_line(name: str, qty: int, subtotal: Money) -> str:
 def fmt_cart_summary(
     lines: list[str],
     total: Money,
+    *,
+    lang: str = "id",
 ) -> str:
     """Build the full cart message text."""
-    header = "🛒 Keranjang Anda:\n\n"
+    header = t("cart.header", lang)
     body = "\n".join(lines)
-    footer = f"\n\n💰 Total: {total.format()}"
+    footer = f"\n\n{t('cart.total_with_value', lang, total=total.format())}"
     return header + body + footer
 
 
-def fmt_products_list(products: list, currency: str) -> str:
+def fmt_products_list(products: list, currency: str, *, lang: str = "id") -> str:
     """Build the text listing for products under a category."""
     parts: list[str] = []
     for p in products:
         price = Money(p.price_smallest_unit, currency)
-        stock_tag = " ⚠️Stok habis" if p.stock == 0 else ""
+        stock_tag = f" ⚠️{t('catalog.out_of_stock', lang)}" if p.stock == 0 else ""
         parts.append(f"📦 {p.name} — {price.format()}{stock_tag}")
     return "\n".join(parts)

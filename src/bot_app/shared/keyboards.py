@@ -72,6 +72,10 @@ PREFIX_CHECKOUT_COUPON = "cko_coupon:"
 # ── Order reorder prefix ────────────────────────────────
 PREFIX_ORDER_REORDER = "ord_reorder:"
 
+# ── Payment action prefixes ──────────────────────────────
+PREFIX_PAYMENT_CHECK = "pay:check:"
+PREFIX_PAYMENT_CANCEL = "pay:cancel:"
+
 
 # ── Catalog keyboards ────────────────────────────────────
 
@@ -693,4 +697,32 @@ def admin_product_images_kb(
     buttons.append([
         InlineKeyboardButton(text="⬅️ Kembali", callback_data=f"{PREFIX_ADMIN_PRD}{product_id}")
     ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ── Payment action keyboards ───────────────────────────────
+
+
+def payment_action_kb(
+    order_id: int,
+    *,
+    check_text: str = "🔄 Cek Pembayaran",
+    cancel_text: str = "❌ Batalkan",
+) -> InlineKeyboardMarkup:
+    """Payment pending state — check status or cancel.
+
+    Callback data:
+    * check  → ``pay:check:<order_id>``
+    * cancel → ``pay:cancel:<order_id>``
+    """
+    buttons: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(
+            text=check_text,
+            callback_data=f"{PREFIX_PAYMENT_CHECK}{order_id}",
+        )],
+        [InlineKeyboardButton(
+            text=cancel_text,
+            callback_data=f"{PREFIX_PAYMENT_CANCEL}{order_id}",
+        )],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

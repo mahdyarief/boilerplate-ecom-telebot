@@ -480,20 +480,79 @@ class PaymentRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
+    async def get_by_identifier(self, payment_identifier: str) -> Payment | None:
+        """Look up a pending payment by its ``payment_identifier``."""
+        stmt = select(Payment).where(
+            Payment.payment_identifier == payment_identifier,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_pending_by_order(self, order_id: int) -> Payment | None:
+        """Return the most recent PENDING payment for an order, or None."""
+        stmt = (
+            select(Payment)
+            .where(
+                Payment.order_id == order_id,
+                Payment.status == PaymentStatus.PENDING.value,
+            )
+            .order_by(Payment.id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         *,
         order_id: int,
         provider: str,
+        payment_identifier: str | None = None,
+        unique_code: int = 0,
+        final_amount: int = 0,
+        qris_payload: str | None = None,
+        payment_url: str | None = None,
     ) -> Payment:
         payment = Payment(
             order_id=order_id,
             provider=provider,
             status=PaymentStatus.PENDING.value,
+            payment_identifier=payment_identifier,
+            unique_code=unique_code,
+            final_amount=final_amount,
+            qris_payload=qris_payload,
+            payment_url=payment_url,
         )
         self._session.add(payment)
         await self._session.flush()
         return payment
+
+    async def update_invoice_data(
+        self,
+        payment_id: int,
+        *,
+        payment_identifier: str | None = None,
+        unique_code: int | None = None,
+        final_amount: int | None = None,
+        qris_payload: str | None = None,
+        payment_url: str | None = None,
+    ) -> None:
+        """Update a payment record with QRIS / Pakasir invoice data."""
+        values: dict = {}
+        if payment_identifier is not None:
+            values["payment_identifier"] = payment_identifier
+        if unique_code is not None:
+            values["unique_code"] = unique_code
+        if final_amount is not None:
+            values["final_amount"] = final_amount
+        if qris_payload is not None:
+            values["qris_payload"] = qris_payload
+        if payment_url is not None:
+            values["payment_url"] = payment_url
+        if not values:
+            return
+        stmt = update(Payment).where(Payment.id == payment_id).values(**values)
+        await self._session.execute(stmt)
 
     async def update_status(
         self,

@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     SHOP_CHANNEL_USERNAME: str = ""
 
     # ── payments ──────────────────────────────────────────────
-    PAYMENT_PROVIDERS: str = "provider_token"
-    PROVIDER_TOKEN: str = ""
+    PAYMENT_METHOD: str = "auto"  # "auto" | "qris" | "pakasir" | "provider_token"
+    PROVIDER_TOKEN: str = ""       # Required for Telegram Payments API (Stripe/YooKassa)
 
     # ── Pakasir payment provider ──────────────────────────────
     PAKASIR_PROJECT_SLUG: str = ""

@@ -165,6 +165,17 @@ class CheckoutService:
 
         Stock was already decremented in :meth:`create_order_from_cart`,
         so no stock mutation happens here — only the bookkeeping changes.
+
+        Parameters
+        ----------
+        order_id : int
+            The order to confirm.
+        telegram_charge_id : str
+            Telegram charge ID (or payment identifier for off-platform).
+        provider_charge_id : str
+            Provider charge ID (or payment identifier for off-platform).
+        provider_name : str
+            Name of the provider ("provider_token", "qris", "pakasir").
         """
         async with UnitOfWork(self._session_factory) as uow:
             order = await uow.orders.get(order_id)
@@ -173,18 +184,30 @@ class CheckoutService:
 
             await uow.orders.update_status(order_id, OrderStatus.PAID)
 
-            payment = await uow.payments.create(
-                order_id=order_id,
-                provider=provider_name,
-            )
-            await uow.session.flush()
+            # Find the existing PENDING payment record for this order/provider
+            existing_payment = await uow.payments.get_pending_by_order(order_id)
 
-            await uow.payments.update_status(
-                payment.id,
-                PaymentStatus.SUCCESS,
-                telegram_charge_id=telegram_charge_id,
-                provider_charge_id=provider_charge_id,
-            )
+            if existing_payment is not None:
+                # Update the existing record to SUCCESS
+                await uow.payments.update_status(
+                    existing_payment.id,
+                    PaymentStatus.SUCCESS,
+                    telegram_charge_id=telegram_charge_id,
+                    provider_charge_id=provider_charge_id,
+                )
+            else:
+                # Create a new payment record (Telegram Payments API path)
+                payment = await uow.payments.create(
+                    order_id=order_id,
+                    provider=provider_name,
+                )
+                await uow.session.flush()
+                await uow.payments.update_status(
+                    payment.id,
+                    PaymentStatus.SUCCESS,
+                    telegram_charge_id=telegram_charge_id,
+                    provider_charge_id=provider_charge_id,
+                )
 
     # ── Order cancellation ─────────────────────────────────
 

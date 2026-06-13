@@ -3,25 +3,33 @@
 Interaction flow (all via inline keyboards + FSM):
 
 1. ``/checkout`` or ``cko:start``  →  ask shipping address (FSM: address)
-2. User types address  →  show review (FSM: review)
-3. ``cko:confirm``  →  reserve stock, create order, send invoice (FSM: paying)
-4. ``cko:cancel``  →  cancel, return to cart
+2. User types address  →  show coupon prompt (FSM: coupon_code)
+3. User applies/skips coupon  →  show review (FSM: review)
+4. ``cko:confirm``  →  reserve stock, create order, send payment (FSM: paying)
+5. ``cko:cancel``  →  cancel, return to cart
 
-Payment lifecycle (handled in ``features/payments/router.py``):
+Payment lifecycle depends on the active provider:
 
-5. ``pre_checkout_query``  →  verify stock & order status
-6. ``successful_payment``  →  mark order as paid, confirm
+- **QRIS / Pakasir**: a QR code + payment instructions are sent inline;
+  the user presses "Check Payment" to poll or "Cancel" to abort.
+  Payment confirmation happens via webhook or manual check.
+- **Telegram Payments API** (``PROVIDER_TOKEN``): a native invoice is sent;
+  Telegram handles ``pre_checkout_query`` and ``successful_payment``.
+- **Dev mode**: when nothing is configured, the order is auto-confirmed.
 
 Callback-data schema (all ≤64 bytes):
 
 * ``cko:start``    — start checkout
 * ``cko:confirm``  — confirm and pay
 * ``cko:cancel``   — cancel checkout
+* ``pay:check:<order_id>``  — check off-platform payment status
+* ``pay:cancel:<order_id>`` — cancel off-platform payment
 """
 
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 
 from aiogram import Router, types
 from aiogram.filters import Command, StateFilter
@@ -32,13 +40,19 @@ from ...app.services.discount import DiscountService
 from ...app.services.pricing import LineItem, compute_total
 from ...core.config import settings
 from ...core.constants import OrderStatus
-from ...core.errors import CouponError, NotFoundError, StockError
+from ...core.errors import CouponError, NotFoundError, PaymentError, StockError
+from ...infrastructure.payments.service import PaymentService
 from ...infrastructure.persistence.uow import UnitOfWork
 from .states import CheckoutStates
 from .texts import (
     fmt_checkout_coupon_prompt,
     fmt_coupon_applied,
     fmt_coupon_invalid,
+    fmt_payment_cancelled,
+    fmt_pakasir_payment_instructions,
+    fmt_payment_check_paid,
+    fmt_payment_check_pending,
+    fmt_qris_payment_instructions,
     fmt_review_with_coupon,
 )
 
@@ -62,6 +76,36 @@ async def _ensure_cart_not_empty(
     async with UnitOfWork(session_factory) as uow:
         count = await uow.cart_items.count_items(user_id)
     return count > 0
+
+
+async def _send_qris_qr(
+    bot: types.Bot,
+    chat_id: int,
+    qris_payload: str,
+) -> None:
+    """Generate a QR code image from the QRIS payload and send it as a photo.
+
+    Falls back to sending the raw QRIS string if qrcode library is not available.
+    """
+    try:
+        import qrcode as qrcode_lib  # type: ignore[import-untyped]
+
+        img = qrcode_lib.make(qris_payload)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=types.BufferedInputFile(buf, filename="qris.png"),
+            caption="📱 Scan QR code ini untuk membayar:",
+        )
+    except ImportError:
+        logger.warning("qrcode library not installed — sending raw QRIS payload instead")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"📱 QRIS Payload:\n<code>{qris_payload}</code>",
+            parse_mode="HTML",
+        )
 
 
 # ── Command handler ──────────────────────────────────────
@@ -328,7 +372,14 @@ async def cb_checkout_confirm(
     state: FSMContext,
     session_factory,  # type: ignore[valid-type]
 ) -> None:
-    """Confirm checkout — create order, reserve stock, send invoice."""
+    """Confirm checkout — create order, reserve stock, initiate payment.
+
+    Payment path is determined by the active provider:
+
+    1. **QRIS / Pakasir** → create invoice via PaymentService, send QR + instructions
+    2. **Telegram Payments API** (PROVIDER_TOKEN) → send native Telegram invoice
+    3. **Dev mode** (nothing configured) → auto-confirm order
+    """
     user_id = callback.from_user.id
 
     data = await state.get_data()
@@ -354,18 +405,30 @@ async def cb_checkout_confirm(
         await callback.answer(f"⚠️ {exc}", show_alert=True)
         return
 
-    # Load order items for the invoice
-    async with UnitOfWork(session_factory) as uow:
-        order_items = await uow.order_items.list_by_order(order.id)
-
     # Update order status to AWAITING_PAYMENT
     async with UnitOfWork(session_factory) as uow:
         await uow.orders.update_status(order.id, OrderStatus.AWAITING_PAYMENT)
 
-    # Build and send Telegram invoice
-    if not settings.PROVIDER_TOKEN:
-        # No provider token configured — mark as paid immediately (dev mode)
-        logger.warning("PROVIDER_TOKEN not set — skipping invoice, auto-confirming order %d", order.id)
+    # ── Determine payment path ─────────────────────────────
+    payment_svc = PaymentService()
+    provider = payment_svc.active_provider
+
+    # ── Path 1: QRIS / Pakasir (off-platform) ───────────────
+    if provider in ("qris", "pakasir"):
+        await _handle_off_platform_payment(
+            callback, state, session_factory, checkout,
+            order, payment_svc, provider, user_id,
+        )
+    # ── Path 2: Telegram Payments API (PROVIDER_TOKEN) ──────
+    elif provider == "provider_token":
+        await _handle_telegram_invoice(
+            callback, state, session_factory, checkout, order, user_id,
+        )
+    # ── Path 3: Dev mode (nothing configured) ───────────────
+    else:
+        logger.warning(
+            "No payment provider configured — auto-confirming order %d", order.id,
+        )
         await checkout.confirm_payment(
             order.id,
             telegram_charge_id=f"dev_auto_{order.id}",
@@ -377,9 +440,113 @@ async def cb_checkout_confirm(
             fmt_payment_success(order.id, order.total_smallest_unit, settings.CURRENCY)
         )
         await callback.answer("✅ Pesanan dibuat (mode dev — auto dikonfirmasi).")
+
+    # Clean up PaymentService resources
+    try:
+        await payment_svc.close()
+    except Exception:
+        pass
+
+
+async def _handle_off_platform_payment(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,
+    checkout: CheckoutService,
+    order,
+    payment_svc: PaymentService,
+    provider: str,
+    user_id: int,
+) -> None:
+    """Handle QRIS or Pakasir payment: create invoice, send QR + instructions."""
+    try:
+        invoice = await payment_svc.create_invoice(
+            order_id=order.id,
+            amount=order.total_smallest_unit,
+        )
+    except PaymentError as exc:
+        logger.error("create_invoice failed for order %d: %s", order.id, exc)
+        # Release stock since we can't collect payment
+        await checkout.cancel_order(order.id, user_id)
+        await state.clear()
+        await callback.answer("❌ Gagal membuat invoice pembayaran. Stok dikembalikan.", show_alert=True)
+        return
+    except Exception as exc:
+        logger.error("create_invoice unexpected error for order %d: %s", order.id, exc)
+        await checkout.cancel_order(order.id, user_id)
+        await state.clear()
+        await callback.answer("❌ Gagal membuat invoice pembayaran. Stok dikembalikan.", show_alert=True)
         return
 
-    # Real invoice
+    # Persist the invoice data in a Payment record
+    async with UnitOfWork(session_factory) as uow:
+        payment = await uow.payments.create(
+            order_id=order.id,
+            provider=invoice.provider,
+            payment_identifier=invoice.payment_identifier,
+            unique_code=invoice.unique_code,
+            final_amount=invoice.final_amount,
+            qris_payload=invoice.qris_payload,
+            payment_url=invoice.payment_url,
+        )
+
+    # Build and send payment instructions
+    if provider == "pakasir" and invoice.payment_url:
+        text = fmt_pakasir_payment_instructions(
+            order_id=order.id,
+            final_amount=invoice.final_amount,
+            currency=settings.CURRENCY,
+            payment_url=invoice.payment_url,
+        )
+        # Also send QRIS payload as QR if available
+        if invoice.qris_payload:
+            await callback.message.answer(text)
+            await _send_qris_qr(callback.bot, user_id, invoice.qris_payload)
+        else:
+            from ...shared.keyboards import payment_action_kb
+            kb = payment_action_kb(order.id)
+            await callback.message.answer(text, reply_markup=kb)
+    else:
+        # Direct QRIS
+        text = fmt_qris_payment_instructions(
+            order_id=order.id,
+            final_amount=invoice.final_amount,
+            base_amount=invoice.amount,
+            unique_code=invoice.unique_code,
+            currency=settings.CURRENCY,
+            provider=invoice.provider,
+            payment_url=invoice.payment_url,
+        )
+        await callback.message.answer(text)
+        if invoice.qris_payload:
+            await _send_qris_qr(callback.bot, user_id, invoice.qris_payload)
+
+    # Send action keyboard separately (after the QR image if any)
+    from ...shared.keyboards import payment_action_kb
+    kb = payment_action_kb(order.id)
+    await callback.message.answer(
+        "📝 Setelah melakukan pembayaran, tekan tombol di bawah:",
+        reply_markup=kb,
+    )
+
+    await state.set_state(CheckoutStates.paying)
+    await state.update_data(order_id=order.id)
+    await callback.answer("💳 Invoice pembayaran dikirim!")
+
+
+async def _handle_telegram_invoice(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,
+    checkout: CheckoutService,
+    order,
+    user_id: int,
+) -> None:
+    """Handle Telegram Payments API: send a native invoice via send_invoice."""
+    # Load order items for the invoice
+    async with UnitOfWork(session_factory) as uow:
+        order_items = await uow.order_items.list_by_order(order.id)
+
     prices = CheckoutService.build_invoice_prices(order_items)
     description = CheckoutService.build_invoice_description(order_items)
 
@@ -421,3 +588,156 @@ async def cb_checkout_cancel(
         "Ketik /cart untuk melihat keranjang Anda."
     )
     await callback.answer("Dibatalkan.")
+
+
+# ── Payment actions: Check & Cancel (off-platform) ──────
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("pay:check:"))
+async def cb_payment_check(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,  # type: ignore[valid-type]
+) -> None:
+    """Check whether an off-platform (QRIS/Pakasir) payment has been received.
+
+    For Pakasir, we query the gateway. For direct QRIS, we check if the
+    order status has been updated (e.g. by a webhook or admin confirmation).
+    """
+    order_id_str = callback.data.split(":")[-1]  # type: ignore[union-attr]
+    if not order_id_str or not order_id_str.isdigit():
+        await callback.answer("❌ Data pesanan tidak valid.", show_alert=True)
+        return
+
+    order_id = int(order_id_str)
+
+    async with UnitOfWork(session_factory) as uow:
+        order = await uow.orders.get(order_id)
+        if order is None:
+            await callback.answer("❌ Pesanan tidak ditemukan.", show_alert=True)
+            return
+
+    # If the order is already PAID, confirm to the user
+    if order.status == OrderStatus.PAID.value:
+        await state.clear()
+        await callback.message.answer(
+            fmt_payment_check_paid(order.id, order.total_smallest_unit, settings.CURRENCY)
+        )
+        await callback.answer("✅ Pembayaran sudah diterima!")
+        return
+
+    # If the order was cancelled, tell the user
+    if order.status == OrderStatus.CANCELLED.value:
+        await state.clear()
+        await callback.answer("❌ Pesanan telah dibatalkan.", show_alert=True)
+        return
+
+    # For Pakasir, query the gateway for status
+    async with UnitOfWork(session_factory) as uow:
+        payment = await uow.payments.get_pending_by_order(order_id)
+
+    if payment is not None and payment.provider == "pakasir" and payment.payment_identifier:
+        payment_svc = PaymentService()
+        try:
+            detail = await payment_svc.pakasir.get_transaction_detail(
+                order_id=payment.payment_identifier,
+                amount=payment.final_amount or order.total_smallest_unit,
+            )
+            if detail.transaction.status in ("completed", "success", "paid"):
+                # Mark as paid
+                checkout = CheckoutService(session_factory)
+                await checkout.confirm_payment(
+                    order_id,
+                    telegram_charge_id=payment.payment_identifier,
+                    provider_charge_id=payment.payment_identifier,
+                    provider_name="pakasir",
+                )
+                await state.clear()
+                await callback.message.answer(
+                    fmt_payment_check_paid(order.id, order.total_smallest_unit, settings.CURRENCY)
+                )
+                await callback.answer("✅ Pembayaran diterima!")
+
+                # Notify admins of low stock
+                try:
+                    from ...features.payments.router import _notify_low_stock
+                    await _notify_low_stock(callback.bot, session_factory)
+                except Exception:
+                    pass
+
+                try:
+                    await payment_svc.close()
+                except Exception:
+                    pass
+                return
+        except Exception as exc:
+            logger.warning("Pakasir status check failed for order %d: %s", order_id, exc)
+        finally:
+            try:
+                await payment_svc.close()
+            except Exception:
+                pass
+
+    # Payment not yet received
+    await callback.answer()
+    await callback.message.answer(fmt_payment_check_pending())
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("pay:cancel:"))
+async def cb_payment_cancel(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,  # type: ignore[valid-type]
+) -> None:
+    """Cancel an off-platform (QRIS/Pakasir) payment and release stock."""
+    order_id_str = callback.data.split(":")[-1]  # type: ignore[union-attr]
+    if not order_id_str or not order_id_str.isdigit():
+        await callback.answer("❌ Data pesanan tidak valid.", show_alert=True)
+        return
+
+    order_id = int(order_id_str)
+    user_id = callback.from_user.id
+
+    async with UnitOfWork(session_factory) as uow:
+        order = await uow.orders.get(order_id)
+        if order is None:
+            await callback.answer("❌ Pesanan tidak ditemukan.", show_alert=True)
+            return
+
+    # Can only cancel orders that are still awaiting payment
+    if order.status not in (
+        OrderStatus.PENDING.value,
+        OrderStatus.AWAITING_PAYMENT.value,
+    ):
+        await callback.answer("❌ Pesanan tidak dapat dibatalkan.", show_alert=True)
+        return
+
+    # For Pakasir, attempt to cancel the transaction on the gateway
+    async with UnitOfWork(session_factory) as uow:
+        payment = await uow.payments.get_pending_by_order(order_id)
+
+    if payment is not None and payment.provider == "pakasir" and payment.payment_identifier:
+        payment_svc = PaymentService()
+        try:
+            await payment_svc.pakasir.cancel_transaction(
+                order_id=payment.payment_identifier,
+                amount=payment.final_amount or order.total_smallest_unit,
+            )
+        except Exception as exc:
+            logger.warning("Pakasir cancel failed for order %d: %s", order_id, exc)
+        finally:
+            try:
+                await payment_svc.close()
+            except Exception:
+                pass
+
+    # Cancel order and release stock
+    checkout = CheckoutService(session_factory)
+    cancelled = await checkout.cancel_order(order_id, user_id)
+
+    if cancelled:
+        await state.clear()
+        await callback.message.answer(fmt_payment_cancelled(order_id))
+        await callback.answer("❌ Dibatalkan.")
+    else:
+        await callback.answer("❌ Gagal membatalkan pesanan.", show_alert=True)

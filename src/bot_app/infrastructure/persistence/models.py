@@ -246,7 +246,10 @@ class OrderItem(Base):
 
 class Payment(Base, _TimestampMixin):
     __tablename__ = "payments"
-    __table_args__ = (Index("ix_payments_order", "order_id"),)
+    __table_args__ = (
+        Index("ix_payments_order", "order_id"),
+        Index("ix_payments_identifier", "payment_identifier"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(Integer, ForeignKey("orders.id"))
@@ -257,6 +260,33 @@ class Payment(Base, _TimestampMixin):
     )
     telegram_charge_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_charge_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # ── QRIS / off-platform payment fields ───────────────
+    payment_identifier: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="Unique ID for off-platform payment reconciliation (e.g. PAY-XXXXXXXX)",
+    )
+    unique_code: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="Unique suffix appended to amount for QRIS reconciliation (e.g. 321)",
+    )
+    final_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="Amount the customer must pay (base + unique_code for QRIS)",
+    )
+    qris_payload: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Dynamic QRIS payload string (for generating QR code image)",
+    )
+    payment_url: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="Pakasir payment page URL (if applicable)",
+    )
 
     # ── relationships ───────────────────────────────────────
     order: Mapped[Order] = relationship("Order", back_populates="payments")
