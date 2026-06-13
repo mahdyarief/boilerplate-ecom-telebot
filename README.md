@@ -129,13 +129,21 @@ make test            # pytest with coverage
 
 ## 🗺️ Roadmap (this boilerplate)
 
-- [x] **Phase 0** — Scaffolding (you are here)
-- [ ] **Phase 1** — Domain & Persistence (User, Category, Product, Cart, Order, Payment models + Alembic)
-- [ ] **Phase 2** — Catalog, cart, i18n
-- [ ] **Phase 3** — Checkout + provider-token payments + stock-war protection
-- [ ] **Phase 4** — Admin surface
-- [x] **Phase 5** — Hardening (Redis FSM, structlog, Docker, error handlers, rate limiter)
-- [ ] **Phase 6** — v1.1 (FastAPI admin panel, YooKassa, CryptoBot, discounts, webhooks)
+- [x] **Phase 0** — Scaffolding
+- [x] **Phase 1** — Domain & Persistence (User, Category, Product, Cart, Order, Payment, Coupon, ProductImage, Wallet + 3 Alembic migrations)
+- [x] **Phase 2** — Catalog, cart, i18n (Indonesian + English, 63+ keys)
+- [x] **Phase 3** — Checkout + payments (QRIS static-to-dynamic, Pakasir API, Telegram Payments API) + 3-layer stock-war protection
+- [x] **Phase 4** — Admin surface (categories, products, orders, coupons, broadcast, wallet)
+- [x] **Phase 5** — Hardening (Redis FSM, structlog, Sentry, Docker, error handlers, rate limit, graceful shutdown, health check, GitHub Actions CI)
+- [x] **Phase 6 (v1.1)** — Discount coupons, QRIS/Pakasir webhooks, wallet/saldo system with refund routing
+
+### Planned for v1.2+
+- [ ] FastAPI admin panel (separate service)
+- [ ] Additional payment providers (YooKassa, CryptoBot, Stripe)
+- [ ] Multi-product image gallery
+- [ ] Webhook signatures for external payment providers
+- [ ] Subscription / recurring billing
+- [ ] Multi-currency display
 
 See [PLAN.md](docs/PLAN.md) for the full implementation plan.
 
