@@ -37,3 +37,7 @@ class RateLimitError(BotError):
 
 class CouponError(BotError):
     """Raised when a coupon cannot be redeemed (invalid, expired, exhausted)."""
+
+
+class WalletError(BotError):
+    """Raised when a wallet operation fails (insufficient balance, etc.)."""

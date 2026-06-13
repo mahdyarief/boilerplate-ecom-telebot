@@ -22,7 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from ...core.constants import OrderStatus, PaymentStatus
+from ...core.constants import OrderStatus, PaymentStatus, WalletTransactionType
 
 # ── Base ────────────────────────────────────────────────────────
 
@@ -351,4 +351,85 @@ class ProductImage(Base, _TimestampMixin):
         return (
             f"<ProductImage id={self.id} product={self.product_id} "
             f"cover={self.is_cover} pos={self.position}>"
+        )
+
+
+# ── Wallet ────────────────────────────────────────────────────
+
+
+class Wallet(Base, _TimestampMixin):
+    __tablename__ = "wallets"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_wallets_user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), unique=True)
+    balance_smallest_unit: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="Current wallet balance in smallest currency unit",
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    # ── relationships ───────────────────────────────────────
+    user: Mapped[User] = relationship("User")
+    transactions: Mapped[list[WalletTransaction]] = relationship(
+        "WalletTransaction",
+        back_populates="wallet",
+        lazy="selectin",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Wallet id={self.id} user={self.user_id} balance={self.balance_smallest_unit}>"
+
+
+# ── WalletTransaction ─────────────────────────────────────────
+
+
+class WalletTransaction(Base, _TimestampMixin):
+    __tablename__ = "wallet_transactions"
+    __table_args__ = (
+        Index("ix_wallet_tx_wallet_type", "wallet_id", "transaction_type"),
+        Index("ix_wallet_tx_order", "order_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_id: Mapped[int] = mapped_column(Integer, ForeignKey("wallets.id"))
+    transaction_type: Mapped[str] = mapped_column(
+        String(32),
+        comment="top_up | payment | refund | admin_adjust",
+    )
+    amount_smallest_unit: Mapped[int] = mapped_column(
+        Integer,
+        comment="Positive for credit, negative for debit",
+    )
+    balance_after: Mapped[int] = mapped_column(
+        Integer,
+        comment="Wallet balance after this transaction",
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("orders.id"),
+        nullable=True,
+        comment="Related order (for payment/refund)",
+    )
+    note: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="Human-readable note for the transaction",
+    )
+
+    # ── relationships ───────────────────────────────────────
+    wallet: Mapped[Wallet] = relationship("Wallet", back_populates="transactions")
+    order: Mapped[Order | None] = relationship("Order")
+
+    def __repr__(self) -> str:
+        return (
+            f"<WalletTransaction id={self.id} wallet={self.wallet_id} "
+            f"type={self.transaction_type!r} amount={self.amount_smallest_unit}>"
         )

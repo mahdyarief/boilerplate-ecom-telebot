@@ -306,3 +306,80 @@ def fmt_payment_cancelled(order_id: int) -> str:
         f"Pesanan #{order_id} telah dibatalkan dan stok dikembalikan.\n"
         f"Ketik /cart untuk melihat keranjang Anda."
     )
+
+
+# ── Wallet / Saldo texts ─────────────────────────────────────
+
+
+def fmt_wallet_balance(balance_smallest_unit: int, currency: str) -> str:
+    """Build wallet balance display text."""
+    balance = Money(balance_smallest_unit, currency)
+    return (
+        f"💳 **Saldo Anda**\n\n"
+        f"💰 Saldo: {balance.format()}\n\n"
+        f"Gunakan saldo untuk pembayaran instan!"
+    )
+
+
+def fmt_wallet_payment_option(
+    balance_smallest_unit: int,
+    total_smallest_unit: int,
+    currency: str,
+) -> str:
+    """Build message showing wallet balance and payment method choice."""
+    balance = Money(balance_smallest_unit, currency)
+    total = Money(total_smallest_unit, currency)
+    return (
+        f"💳 **Pilih Metode Pembayaran**\n\n"
+        f"💰 Saldo Anda: {balance.format()}\n"
+        f"💰 Total pesanan: {total.format()}\n\n"
+        f"Anda memiliki saldo yang cukup! Bayar instan dengan saldo "
+        f"atau gunakan metode pembayaran lain."
+    )
+
+
+def fmt_wallet_payment_success(
+    order_id: int,
+    total_smallest_unit: int,
+    currency: str,
+    new_balance: int,
+) -> str:
+    """Build the wallet-payment success message."""
+    total = Money(total_smallest_unit, currency)
+    remaining = Money(new_balance, currency)
+    return (
+        f"✅ **Pembayaran Saldo Berhasil!**\n\n"
+        f"Pesanan #{order_id} telah dibayar menggunakan saldo.\n"
+        f"💰 Total: {total.format()}\n"
+        f"💰 Sisa saldo: {remaining.format()}\n\n"
+        f"Terima kasih telah berbelanja! 🎉\n"
+        f"Gunakan /orders untuk melihat pesanan Anda."
+    )
+
+
+def fmt_wallet_transactions(transactions: list, currency: str) -> str:
+    """Build wallet transaction history text."""
+    if not transactions:
+        return "💳 **Riwayat Saldo**\n\n📭 Belum ada transaksi."
+
+    from ...core.constants import WalletTransactionType
+
+    type_emoji = {
+        WalletTransactionType.TOP_UP.value: "⬆️",
+        WalletTransactionType.PAYMENT.value: "⬇️",
+        WalletTransactionType.REFUND.value: "🔄",
+        WalletTransactionType.ADMIN_ADJUST.value: "🔧",
+    }
+
+    lines = ["💳 **Riwayat Saldo:**\n"]
+    for tx in transactions[:10]:
+        emoji = type_emoji.get(tx.transaction_type, "❓")
+        amount = Money(abs(tx.amount_smallest_unit), currency)
+        balance_after = Money(tx.balance_after, currency)
+        sign = "+" if tx.amount_smallest_unit > 0 else "-"
+        note = tx.note or ""
+        lines.append(
+            f"{emoji} {sign}{amount.format()} → {balance.format()} {note}"
+        )
+
+    return "\n".join(lines)

@@ -76,6 +76,10 @@ PREFIX_ORDER_REORDER = "ord_reorder:"
 PREFIX_PAYMENT_CHECK = "pay:check:"
 PREFIX_PAYMENT_CANCEL = "pay:cancel:"
 
+# ── Payment method selection prefixes ───────────────────
+PREFIX_PAYMENT_METHOD_WALLET = "paym:wallet:"
+PREFIX_PAYMENT_METHOD_OTHER = "paym:other:"
+
 
 # ── Catalog keyboards ────────────────────────────────────
 
@@ -296,6 +300,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     * products   → ``adm:prds``
     * orders     → ``adm:ords``
     * coupons    → ``adm:cpns``
+    * wallets    → ``adm:wls``
     * broadcast  → ``adm:bcast``
     """
     buttons: list[list[InlineKeyboardButton]] = [
@@ -303,6 +308,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📦 Produk", callback_data=PREFIX_ADMIN_PRDS)],
         [InlineKeyboardButton(text="📋 Pesanan", callback_data=PREFIX_ADMIN_ORDS)],
         [InlineKeyboardButton(text="🎟️ Kupon", callback_data=PREFIX_ADMIN_COUPONS)],
+        [InlineKeyboardButton(text="💳 Saldo", callback_data="adm:wls")],
         [InlineKeyboardButton(text="📢 Broadcast", callback_data=PREFIX_ADMIN_BCAST)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -724,5 +730,83 @@ def payment_action_kb(
             text=cancel_text,
             callback_data=f"{PREFIX_PAYMENT_CANCEL}{order_id}",
         )],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ── Payment method selection keyboards ──────────────────────
+
+
+def payment_method_select_kb(
+    order_id: int,
+    wallet_balance: int,
+    order_total: int,
+    currency: str = "IDR",
+    *,
+    wallet_text: str | None = None,
+    other_text: str = "💳 Metode Lain",
+    cancel_text: str = "❌ Batalkan",
+) -> InlineKeyboardMarkup:
+    """Payment method selection — wallet (saldo) or other provider.
+
+    Callback data:
+    * wallet → ``paym:wallet:<order_id>``
+    * other  → ``paym:other:<order_id>``
+    * cancel → ``pay:cancel:<order_id>``
+    """
+    from .money import Money as _Money
+
+    balance_str = _Money(wallet_balance, currency).format()
+    if wallet_text is None:
+        wallet_text = f"💰 Bayar dengan saldo ({balance_str})"
+
+    buttons: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(
+            text=wallet_text,
+            callback_data=f"{PREFIX_PAYMENT_METHOD_WALLET}{order_id}",
+        )],
+        [InlineKeyboardButton(
+            text=other_text,
+            callback_data=f"{PREFIX_PAYMENT_METHOD_OTHER}{order_id}",
+        )],
+        [InlineKeyboardButton(
+            text=cancel_text,
+            callback_data=f"{PREFIX_PAYMENT_CANCEL}{order_id}",
+        )],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ── Admin wallet keyboards ──────────────────────────────────
+
+
+def admin_wallet_panel_kb() -> InlineKeyboardMarkup:
+    """Admin wallet management panel.
+
+    Callback data:
+    * top-up  → ``adm:wl_topup``
+    * adjust  → ``adm:wl_adj``
+    * back    → ``adm:back``
+    """
+    buttons: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️ Top-up Saldo", callback_data="adm:wl_topup")],
+        [InlineKeyboardButton(text="🔧 Penyesuaian Saldo", callback_data="adm:wl_adj")],
+        [InlineKeyboardButton(text="⬅️ Kembali", callback_data=PREFIX_ADMIN_BACK)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_wallet_user_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Admin wallet detail for a specific user.
+
+    Callback data:
+    * top-up  → ``adm:wl_topup``
+    * adjust  → ``adm:wl_adj``
+    * back    → ``adm:wls``
+    """
+    buttons: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️ Top-up Saldo", callback_data="adm:wl_topup")],
+        [InlineKeyboardButton(text="🔧 Penyesuaian Saldo", callback_data="adm:wl_adj")],
+        [InlineKeyboardButton(text="⬅️ Kembali", callback_data="adm:wls")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

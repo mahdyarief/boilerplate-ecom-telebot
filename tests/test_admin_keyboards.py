@@ -58,10 +58,10 @@ def _make_order(id_: int, total_smallest_unit: int = 50000, status: str = "paid"
 
 
 class TestAdminPanelKb:
-    def test_has_five_buttons(self) -> None:
+    def test_has_six_buttons(self) -> None:
         kb = admin_panel_kb()
-        # 5 sections: categories, products, orders, coupons, broadcast
-        assert len(kb.inline_keyboard) == 5
+        # 6 sections: categories, products, orders, coupons, wallets, broadcast
+        assert len(kb.inline_keyboard) == 6
 
     def test_button_callbacks(self) -> None:
         kb = admin_panel_kb()
@@ -69,7 +69,8 @@ class TestAdminPanelKb:
         assert kb.inline_keyboard[1][0].callback_data == PREFIX_ADMIN_PRDS
         assert kb.inline_keyboard[2][0].callback_data == PREFIX_ADMIN_ORDS
         assert kb.inline_keyboard[3][0].callback_data == PREFIX_ADMIN_COUPONS
-        assert kb.inline_keyboard[4][0].callback_data == PREFIX_ADMIN_BCAST
+        assert kb.inline_keyboard[4][0].callback_data == "adm:wls"  # Wallet / Saldo
+        assert kb.inline_keyboard[5][0].callback_data == PREFIX_ADMIN_BCAST
 
 
 # ── admin_category_list_kb ────────────────────────────────

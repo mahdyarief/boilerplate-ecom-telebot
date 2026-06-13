@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...core.constants import OrderStatus, PaymentStatus
+from ...core.constants import OrderStatus, PaymentStatus, WalletTransactionType
 from .models import (
     CartItem,
     Category,
@@ -24,6 +24,8 @@ from .models import (
     Product,
     ProductImage,
     User,
+    Wallet,
+    WalletTransaction,
 )
 
 # ── User ───────────────────────────────────────────────────────
@@ -742,3 +744,155 @@ class ProductImageRepository:
             .values(position=position)
         )
         await self._session.execute(stmt)
+
+
+# ── Wallet ────────────────────────────────────────────────────
+
+
+class WalletRepository:
+    """Data access for the ``wallets`` and ``wallet_transactions`` tables."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    # ── Wallet ──────────────────────────────────────────────
+
+    async def get_by_user(self, user_id: int) -> Wallet | None:
+        stmt = select(Wallet).where(Wallet.user_id == user_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_or_create(self, user_id: int) -> Wallet:
+        """Return existing wallet or create one with zero balance."""
+        wallet = await self.get_by_user(user_id)
+        if wallet is not None:
+            return wallet
+        wallet = Wallet(user_id=user_id, balance_smallest_unit=0)
+        self._session.add(wallet)
+        await self._session.flush()
+        return wallet
+
+    async def credit(
+        self,
+        wallet_id: int,
+        amount: int,
+        *,
+        transaction_type: str = WalletTransactionType.TOP_UP.value,
+        order_id: int | None = None,
+        note: str | None = None,
+    ) -> WalletTransaction:
+        """Add *amount* to the wallet and create a transaction record.
+
+        Parameters
+        ----------
+        wallet_id : int
+            The wallet to credit.
+        amount : int
+            Amount in smallest currency unit (must be > 0).
+        transaction_type : str
+            One of ``WalletTransactionType`` values.
+        order_id : int | None
+            Related order (if applicable).
+        note : str | None
+            Human-readable note.
+
+        Returns
+        -------
+        WalletTransaction
+            The created transaction record.
+        """
+        if amount <= 0:
+            raise ValueError("Credit amount must be > 0")
+
+        # Atomically increment balance using SQL expression
+        stmt = (
+            update(Wallet)
+            .where(Wallet.id == wallet_id)
+            .values(balance_smallest_unit=Wallet.balance_smallest_unit + amount)
+        )
+        await self._session.execute(stmt)
+
+        # Read the updated balance
+        stmt = select(Wallet).where(Wallet.id == wallet_id)
+        result = await self._session.execute(stmt)
+        wallet = result.scalar_one()
+
+        tx = WalletTransaction(
+            wallet_id=wallet_id,
+            transaction_type=transaction_type,
+            amount_smallest_unit=amount,
+            balance_after=wallet.balance_smallest_unit,
+            order_id=order_id,
+            note=note,
+        )
+        self._session.add(tx)
+        await self._session.flush()
+        return tx
+
+    async def debit(
+        self,
+        wallet_id: int,
+        amount: int,
+        *,
+        transaction_type: str = WalletTransactionType.PAYMENT.value,
+        order_id: int | None = None,
+        note: str | None = None,
+    ) -> WalletTransaction:
+        """Subtract *amount* from the wallet atomically.
+
+        Uses ``WHERE balance >= amount`` to guarantee the balance never
+        goes negative.  Returns the transaction record on success.
+
+        Raises
+        ------
+        ValueError
+            If the wallet has insufficient balance.
+        """
+        if amount <= 0:
+            raise ValueError("Debit amount must be > 0")
+
+        # Atomically decrement balance with guard
+        stmt = (
+            update(Wallet)
+            .where(Wallet.id == wallet_id, Wallet.balance_smallest_unit >= amount)
+            .values(balance_smallest_unit=Wallet.balance_smallest_unit - amount)
+        )
+        result = await self._session.execute(stmt)
+        if result.rowcount == 0:
+            raise ValueError("Insufficient wallet balance")
+
+        # Read the updated balance
+        stmt = select(Wallet).where(Wallet.id == wallet_id)
+        result = await self._session.execute(stmt)
+        wallet = result.scalar_one()
+
+        tx = WalletTransaction(
+            wallet_id=wallet_id,
+            transaction_type=transaction_type,
+            amount_smallest_unit=-amount,  # negative for debit
+            balance_after=wallet.balance_smallest_unit,
+            order_id=order_id,
+            note=note,
+        )
+        self._session.add(tx)
+        await self._session.flush()
+        return tx
+
+    # ── Transactions ───────────────────────────────────────
+
+    async def list_transactions(
+        self,
+        wallet_id: int,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Sequence[WalletTransaction]:
+        stmt = (
+            select(WalletTransaction)
+            .where(WalletTransaction.wallet_id == wallet_id)
+            .order_by(WalletTransaction.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()

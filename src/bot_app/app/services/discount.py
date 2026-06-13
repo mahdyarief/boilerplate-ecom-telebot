@@ -40,8 +40,14 @@ class DiscountService:
                 raise CouponError("Kupon sudah dinonaktifkan.")
 
             # Check expiry
-            if coupon.expires_at is not None and datetime.now(UTC) > coupon.expires_at:
-                raise CouponError("Kupon sudah kadaluarsa.")
+            if coupon.expires_at is not None:
+                now = datetime.now(UTC)
+                exp = coupon.expires_at
+                if exp.tzinfo is None:
+                    from datetime import timezone
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if now > exp:
+                    raise CouponError("Kupon sudah kadaluarsa.")
 
             # Check usage limit
             if coupon.max_uses is not None and coupon.used_count >= coupon.max_uses:
@@ -67,9 +73,37 @@ class DiscountService:
 
         Returns ``(True, "", discount_percent)`` if valid, or
         ``(False, error_message, 0)`` if not.
+
+        Unlike :meth:`redeem_coupon`, this method does **not** increment
+        ``used_count``.  Use this when you only need to verify a coupon's
+        validity (e.g. for UI feedback) without consuming it.
         """
-        try:
-            percent = await self.redeem_coupon(code)
-            return True, "", percent
-        except CouponError as exc:
-            return False, str(exc), 0
+        async with UnitOfWork(self._session_factory) as uow:
+            coupon = await uow.coupons.get_by_code(code.upper().strip())
+            if coupon is None:
+                return False, "Kupon tidak ditemukan.", 0
+
+            if not coupon.is_active:
+                return False, "Kupon sudah dinonaktifkan.", 0
+
+            # Check expiry
+            if coupon.expires_at is not None:
+                now = datetime.now(UTC)
+                # Handle both offset-aware and offset-naive expires_at
+                exp = coupon.expires_at
+                if exp.tzinfo is None:
+                    # Treat naive datetime as UTC
+                    from datetime import timezone
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if now > exp:
+                    return False, "Kupon sudah kadaluarsa.", 0
+
+            # Check usage limit
+            if coupon.max_uses is not None and coupon.used_count >= coupon.max_uses:
+                return False, "Kupon sudah habis digunakan.", 0
+
+            # Validate discount range
+            if not 0 < coupon.discount_percent <= 100:
+                return False, "Kupon tidak valid.", 0
+
+            return True, "", coupon.discount_percent

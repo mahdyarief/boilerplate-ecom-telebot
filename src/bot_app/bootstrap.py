@@ -26,6 +26,7 @@ from .features.checkout.router import router as checkout_router
 from .features.orders.router import router as orders_router
 from .features.payments.router import router as payments_router
 from .features.start.router import router as start_router
+from .features.wallet.router import router as wallet_router
 from .infrastructure.fsm.redis_storage import build_redis_storage
 from .infrastructure.i18n import LanguageMiddleware
 from .infrastructure.persistence.engine import create_engine, create_session_factory
@@ -88,6 +89,7 @@ async def bootstrap() -> tuple[Bot, Dispatcher, AsyncEngine]:
     dp.include_router(checkout_router)
     dp.include_router(orders_router)
     dp.include_router(payments_router)
+    dp.include_router(wallet_router)
     dp.include_router(admin_router)
     dp.include_router(basic_router)
 

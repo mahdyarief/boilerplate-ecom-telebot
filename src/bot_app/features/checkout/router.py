@@ -38,9 +38,10 @@ from aiogram.fsm.context import FSMContext
 from ...app.services.checkout import CheckoutService
 from ...app.services.discount import DiscountService
 from ...app.services.pricing import LineItem, compute_total
+from ...app.services.wallet import WalletService
 from ...core.config import settings
-from ...core.constants import OrderStatus
-from ...core.errors import CouponError, NotFoundError, PaymentError, StockError
+from ...core.constants import OrderStatus, PaymentStatus
+from ...core.errors import CouponError, NotFoundError, PaymentError, StockError, WalletError
 from ...infrastructure.payments.service import PaymentService
 from ...infrastructure.persistence.uow import UnitOfWork
 from .states import CheckoutStates
@@ -54,6 +55,8 @@ from .texts import (
     fmt_payment_check_pending,
     fmt_qris_payment_instructions,
     fmt_review_with_coupon,
+    fmt_wallet_payment_option,
+    fmt_wallet_payment_success,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,12 +323,13 @@ async def _build_review(
     currency: str,
 ) -> tuple[str, object]:
     """Build the checkout review text and keyboard."""
+    from types import SimpleNamespace
+
     from ...shared.keyboards import checkout_confirm_kb
     from ...shared.money import Money
 
     line_items: list[LineItem] = []
-    lines: list[str] = []
-    cart_items_data: list[tuple[str, int, int]] = []  # (name, qty, unit_price)
+    review_items: list[SimpleNamespace] = []  # items for fmt_review_with_coupon
 
     async with UnitOfWork(session_factory) as uow:
         cart_items = await uow.cart_items.list_by_user(user_id)
@@ -334,10 +338,12 @@ async def _build_review(
             if product is None:
                 continue
             unit_price = Money(product.price_smallest_unit, currency)
-            subtotal = unit_price * item.quantity
-            lines.append(f"  • {product.name} x{item.quantity} — {subtotal.format()}")
             line_items.append(LineItem(unit_price=unit_price, quantity=item.quantity))
-            cart_items_data.append((product.name, item.quantity, product.price_smallest_unit))
+            review_items.append(SimpleNamespace(
+                product_name=product.name,
+                quantity=item.quantity,
+                unit_price_smallest_unit=product.price_smallest_unit,
+            ))
 
     breakdown = compute_total(line_items, currency, coupon_percent=coupon_percent)
     discount_amount = breakdown.discount.amount_minor
@@ -345,19 +351,13 @@ async def _build_review(
     total = breakdown.total
 
     review_text = fmt_review_with_coupon(
-        items=[],  # We build lines manually
+        items=review_items,
         total_smallest_unit=total.amount_minor,
         currency=currency,
         shipping_address=shipping_address,
         discount_percent=coupon_percent,
         discount_amount=discount_amount,
     )
-
-    # Rebuild review_text with actual cart lines
-    parts = review_text.split("📋 **Konfirmasi Pesanan**\n\n", 1)
-    cart_lines_text = "\n".join(lines)
-    if len(parts) == 2:
-        review_text = "📋 **Konfirmasi Pesanan**\n\n" + cart_lines_text + parts[1]
 
     kb = checkout_confirm_kb()
     return review_text, kb
@@ -366,7 +366,7 @@ async def _build_review(
 # ── FSM: Review — Confirm ───────────────────────────────
 
 
-@router.callback_query(lambda c: c.data == f"{_CHECKOUT_PREFIX}confirm")
+@router.callback_query(lambda c: c.data == f"{_CHECKOUT_PREFIX}confirm", StateFilter(CheckoutStates.review))
 async def cb_checkout_confirm(
     callback: types.CallbackQuery,
     state: FSMContext,
@@ -376,9 +376,10 @@ async def cb_checkout_confirm(
 
     Payment path is determined by the active provider:
 
-    1. **QRIS / Pakasir** → create invoice via PaymentService, send QR + instructions
-    2. **Telegram Payments API** (PROVIDER_TOKEN) → send native Telegram invoice
-    3. **Dev mode** (nothing configured) → auto-confirm order
+    1. **Wallet** → pay instantly from user's saldo
+    2. **QRIS / Pakasir** → create invoice via PaymentService, send QR + instructions
+    3. **Telegram Payments API** (PROVIDER_TOKEN) → send native Telegram invoice
+    4. **Dev mode** (nothing configured) → auto-confirm order
     """
     user_id = callback.from_user.id
 
@@ -410,21 +411,64 @@ async def cb_checkout_confirm(
         await uow.orders.update_status(order.id, OrderStatus.AWAITING_PAYMENT)
 
     # ── Determine payment path ─────────────────────────────
+    # Check if the user wants to pay via wallet (FSM data)
+    payment_method = data.get("payment_method", "auto")
+
+    # ── Path 1: Wallet payment (saldo) ────────────────────────
+    if payment_method == "wallet":
+        await _handle_wallet_payment(
+            callback, state, session_factory, checkout,
+            order, user_id,
+        )
+        # Clean up PaymentService resources
+        try:
+            payment_svc = PaymentService()
+            await payment_svc.close()
+        except Exception:
+            pass
+        return
+
+    # ── Auto-select: if wallet has enough balance, offer wallet payment ──
+    if payment_method == "auto":
+        wallet_svc = WalletService(session_factory)
+        try:
+            balance = await wallet_svc.get_balance(user_id)
+            if balance >= order.total_smallest_unit:
+                # Show payment method selection keyboard
+                await state.update_data(order_id=order.id)
+                await state.set_state(CheckoutStates.paying)
+                from ...shared.keyboards import payment_method_select_kb
+                kb = payment_method_select_kb(order.id, balance, order.total_smallest_unit, settings.CURRENCY)
+                await callback.message.answer(
+                    fmt_wallet_payment_option(balance, order.total_smallest_unit, settings.CURRENCY),
+                    reply_markup=kb,
+                )
+                await callback.answer("💳 Pilih metode pembayaran!")
+                # Clean up
+                try:
+                    payment_svc = PaymentService()
+                    await payment_svc.close()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass  # Fall through to other payment methods
+
+    # ── Path 2: QRIS / Pakasir (off-platform) ───────────────
     payment_svc = PaymentService()
     provider = payment_svc.active_provider
 
-    # ── Path 1: QRIS / Pakasir (off-platform) ───────────────
     if provider in ("qris", "pakasir"):
         await _handle_off_platform_payment(
             callback, state, session_factory, checkout,
             order, payment_svc, provider, user_id,
         )
-    # ── Path 2: Telegram Payments API (PROVIDER_TOKEN) ──────
+    # ── Path 3: Telegram Payments API (PROVIDER_TOKEN) ──────
     elif provider == "provider_token":
         await _handle_telegram_invoice(
             callback, state, session_factory, checkout, order, user_id,
         )
-    # ── Path 3: Dev mode (nothing configured) ───────────────
+    # ── Path 4: Dev mode (nothing configured) ───────────────
     else:
         logger.warning(
             "No payment provider configured — auto-confirming order %d", order.id,
@@ -573,10 +617,179 @@ async def _handle_telegram_invoice(
     await callback.answer("💳 Invoice dikirim! Silakan lakukan pembayaran.")
 
 
+async def _handle_wallet_payment(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,
+    checkout: CheckoutService,
+    order,
+    user_id: int,
+) -> None:
+    """Handle wallet (saldo) payment: debit wallet, mark order as PAID instantly."""
+    wallet_svc = WalletService(session_factory)
+
+    try:
+        new_balance = await checkout.pay_with_wallet(order.id, user_id)
+    except WalletError as exc:
+        # Wallet has insufficient balance — release stock and cancel
+        await checkout.cancel_order(order.id, user_id)
+        await state.clear()
+        await callback.answer(f"❌ {exc}", show_alert=True)
+        return
+    except NotFoundError as exc:
+        await checkout.cancel_order(order.id, user_id)
+        await state.clear()
+        await callback.answer(f"❌ {exc}", show_alert=True)
+        return
+    except Exception as exc:
+        logger.error("wallet payment failed for order %d: %s", order.id, exc)
+        await checkout.cancel_order(order.id, user_id)
+        await state.clear()
+        await callback.answer("❌ Gagal memproses pembayaran saldo. Stok dikembalikan.", show_alert=True)
+        return
+
+    await state.clear()
+    from .texts import fmt_wallet_payment_success
+    await callback.message.answer(
+        fmt_wallet_payment_success(
+            order.id, order.total_smallest_unit, settings.CURRENCY, new_balance,
+        )
+    )
+    await callback.answer("✅ Pembayaran saldo berhasil!")
+
+    # Notify admins of low stock
+    try:
+        from ...features.payments.router import _notify_low_stock
+        await _notify_low_stock(callback.bot, session_factory)
+    except Exception:
+        pass
+
+
+# ── Payment method selection (wallet vs other) ──────────
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("paym:wallet:"), StateFilter(CheckoutStates.paying))
+async def cb_pay_method_wallet(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,  # type: ignore[valid-type]
+) -> None:
+    """User chose to pay with wallet (saldo)."""
+    assert callback.data is not None
+    payload = callback.data[len("paym:wallet:"):]
+    if not payload.isdigit():
+        await callback.answer("❌ Data pesanan tidak valid.", show_alert=True)
+        return
+
+    order_id = int(payload)
+    user_id = callback.from_user.id
+    checkout = CheckoutService(session_factory)
+
+    try:
+        new_balance = await checkout.pay_with_wallet(order_id, user_id)
+    except WalletError as exc:
+        await callback.answer(f"❌ {exc}", show_alert=True)
+        return
+    except NotFoundError as exc:
+        await callback.answer(f"❌ {exc}", show_alert=True)
+        return
+    except Exception as exc:
+        logger.error("wallet payment failed for order %d: %s", order_id, exc)
+        await callback.answer("❌ Gagal memproses pembayaran saldo.", show_alert=True)
+        return
+
+    await state.clear()
+
+    async with UnitOfWork(session_factory) as uow:
+        order = await uow.orders.get(order_id)
+
+    if order is None:
+        total = 0
+    else:
+        total = order.total_smallest_unit
+
+    await callback.message.answer(
+        fmt_wallet_payment_success(order_id, total, settings.CURRENCY, new_balance)
+    )
+    await callback.answer("✅ Pembayaran saldo berhasil!")
+
+    # Notify admins of low stock
+    try:
+        from ...features.payments.router import _notify_low_stock
+        await _notify_low_stock(callback.bot, session_factory)
+    except Exception:
+        pass
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("paym:other:"), StateFilter(CheckoutStates.paying))
+async def cb_pay_method_other(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session_factory,  # type: ignore[valid-type]
+) -> None:
+    """User chose to pay with another method (QRIS/Pakasir/Telegram invoice)."""
+    assert callback.data is not None
+    payload = callback.data[len("paym:other:"):]
+    if not payload.isdigit():
+        await callback.answer("❌ Data pesanan tidak valid.", show_alert=True)
+        return
+
+    order_id = int(payload)
+    user_id = callback.from_user.id
+
+    # Determine the external payment provider
+    payment_svc = PaymentService()
+    provider = payment_svc.active_provider
+
+    checkout = CheckoutService(session_factory)
+
+    # Reload order
+    async with UnitOfWork(session_factory) as uow:
+        order = await uow.orders.get(order_id)
+
+    if order is None:
+        await callback.answer("❌ Pesanan tidak ditemukan.", show_alert=True)
+        try:
+            await payment_svc.close()
+        except Exception:
+            pass
+        return
+
+    if provider in ("qris", "pakasir"):
+        await _handle_off_platform_payment(
+            callback, state, session_factory, checkout,
+            order, payment_svc, provider, user_id,
+        )
+    elif provider == "provider_token":
+        await _handle_telegram_invoice(
+            callback, state, session_factory, checkout, order, user_id,
+        )
+    else:
+        # Dev mode auto-confirm
+        logger.warning(
+            "No payment provider configured — auto-confirming order %d", order.id,
+        )
+        await checkout.confirm_payment(
+            order.id,
+            telegram_charge_id=f"dev_auto_{order.id}",
+            provider_charge_id=f"dev_auto_{order.id}",
+        )
+        await state.clear()
+        from .texts import fmt_payment_success
+        await callback.message.answer(
+            fmt_payment_success(order.id, order.total_smallest_unit, settings.CURRENCY)
+        )
+        await callback.answer("✅ Pesanan dibuat (mode dev — auto dikonfirmasi).")
+        try:
+            await payment_svc.close()
+        except Exception:
+            pass
+
+
 # ── FSM: Review — Cancel ────────────────────────────────
 
 
-@router.callback_query(lambda c: c.data == f"{_CHECKOUT_PREFIX}cancel")
+@router.callback_query(lambda c: c.data == f"{_CHECKOUT_PREFIX}cancel", StateFilter(CheckoutStates.review, CheckoutStates.coupon_code))
 async def cb_checkout_cancel(
     callback: types.CallbackQuery,
     state: FSMContext,
@@ -736,6 +949,11 @@ async def cb_payment_cancel(
     cancelled = await checkout.cancel_order(order_id, user_id)
 
     if cancelled:
+        # Mark any PENDING payment as FAILED so it doesn't linger
+        if payment is not None:
+            async with UnitOfWork(session_factory) as uow:
+                await uow.payments.update_status(payment.id, PaymentStatus.FAILED)
+
         await state.clear()
         await callback.message.answer(fmt_payment_cancelled(order_id))
         await callback.answer("❌ Dibatalkan.")

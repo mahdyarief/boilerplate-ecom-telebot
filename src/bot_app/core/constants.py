@@ -16,6 +16,8 @@ class CommandName(StrEnum):
     CART = "/cart"
     ORDERS = "/orders"
     ADMIN = "/admin"
+    WALLET = "/wallet"
+    SALDO = "/saldo"
 
 
 class OrderStatus(StrEnum):
@@ -39,3 +41,11 @@ class CouponStatus(StrEnum):
     EXHAUSTED = "exhausted"
     EXPIRED = "expired"
     DISABLED = "disabled"
+
+
+class WalletTransactionType(StrEnum):
+    """Types of wallet transactions."""
+    TOP_UP = "top_up"
+    PAYMENT = "payment"
+    REFUND = "refund"
+    ADMIN_ADJUST = "admin_adjust"

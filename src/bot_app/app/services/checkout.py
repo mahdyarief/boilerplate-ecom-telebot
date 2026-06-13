@@ -13,8 +13,8 @@ import logging
 from aiogram.types import LabeledPrice
 
 from ...core.config import settings
-from ...core.constants import OrderStatus, PaymentStatus
-from ...core.errors import NotFoundError, StockError
+from ...core.constants import OrderStatus, PaymentStatus, WalletTransactionType
+from ...core.errors import NotFoundError, StockError, WalletError
 from ...infrastructure.persistence.models import Order
 from ...infrastructure.persistence.uow import UnitOfWork
 from ...shared.money import Money
@@ -234,6 +234,151 @@ class CheckoutService:
 
             await uow.orders.update_status(order_id, OrderStatus.CANCELLED)
             return True
+
+    # ── Wallet payment ────────────────────────────────────────
+
+    async def pay_with_wallet(
+        self,
+        order_id: int,
+        user_id: int,
+    ) -> int:
+        """Pay for an order using the user's wallet (saldo).
+
+        This is an atomic operation that:
+        1. Verifies the order belongs to the user and is awaiting payment
+        2. Debits the wallet balance (with ``WHERE balance >= amount`` guard)
+        3. Creates a Payment record with provider="wallet"
+        4. Updates the order status to PAID
+
+        Returns the new wallet balance after payment.
+
+        Raises
+        ------
+        NotFoundError
+            If the order does not exist or doesn't belong to the user.
+        WalletError
+            If the wallet has insufficient balance.
+        """
+        async with UnitOfWork(self._session_factory) as uow:
+            order = await uow.orders.get(order_id)
+            if order is None or order.user_id != user_id:
+                raise NotFoundError(f"Pesanan #{order_id} tidak ditemukan.")
+
+            if order.status not in (
+                OrderStatus.PENDING.value,
+                OrderStatus.AWAITING_PAYMENT.value,
+            ):
+                raise NotFoundError(
+                    f"Pesanan #{order_id} tidak dapat dibayar (status: {order.status})."
+                )
+
+            amount = order.total_smallest_unit
+
+            # Get or create wallet
+            wallet = await uow.wallets.get_or_create(user_id)
+
+            # Atomic debit with balance guard
+            try:
+                tx = await uow.wallets.debit(
+                    wallet.id,
+                    amount,
+                    transaction_type=WalletTransactionType.PAYMENT.value,
+                    order_id=order_id,
+                    note=f"Pembayaran pesanan #{order_id}",
+                )
+            except ValueError:
+                raise WalletError(
+                    f"Saldo tidak cukup. Saldo Anda: {wallet.balance_smallest_unit}, "
+                    f"dibutuhkan: {amount}."
+                )
+
+            # Create a Payment record with provider="wallet"
+            await uow.payments.create(
+                order_id=order_id,
+                provider="wallet",
+            )
+            # Flush to get the payment record ID
+            await uow.session.flush()
+
+            # Mark the payment as SUCCESS
+            pending = await uow.payments.get_pending_by_order(order_id)
+            if pending is not None:
+                await uow.payments.update_status(
+                    pending.id,
+                    PaymentStatus.SUCCESS,
+                    telegram_charge_id=f"wallet_{order_id}_{tx.id}",
+                    provider_charge_id=f"wallet_{order_id}_{tx.id}",
+                )
+
+            # Update order status to PAID
+            await uow.orders.update_status(order_id, OrderStatus.PAID)
+
+            logger.info(
+                "wallet payment confirmed: order=%d user=%d amount=%d balance_after=%d",
+                order_id, user_id, amount, tx.balance_after,
+            )
+
+            return tx.balance_after
+
+    # ── Wallet refund on cancellation ─────────────────────────
+
+    async def cancel_order_and_refund_wallet(
+        self,
+        order_id: int,
+        user_id: int,
+    ) -> tuple[bool, int]:
+        """Cancel an order, release stock, and refund wallet if it was paid via wallet.
+
+        Returns ``(cancelled, refunded_amount)`` where ``refunded_amount``
+        is 0 if the order was not paid via wallet.
+        """
+        async with UnitOfWork(self._session_factory) as uow:
+            order = await uow.orders.get(order_id)
+            if order is None or order.user_id != user_id:
+                return False, 0
+
+            if order.status not in (
+                OrderStatus.PENDING.value,
+                OrderStatus.AWAITING_PAYMENT.value,
+                OrderStatus.PAID.value,
+            ):
+                return False, 0
+
+            refunded_amount = 0
+
+            # If the order was paid via wallet, refund it
+            if order.status == OrderStatus.PAID.value:
+                payments = await uow.payments.get_by_order(order_id)
+                wallet_payment = None
+                for p in payments:
+                    if p.provider == "wallet" and p.status == PaymentStatus.SUCCESS.value:
+                        wallet_payment = p
+                        break
+
+                if wallet_payment is not None:
+                    wallet = await uow.wallets.get_or_create(user_id)
+                    await uow.wallets.credit(
+                        wallet.id,
+                        order.total_smallest_unit,
+                        transaction_type=WalletTransactionType.REFUND.value,
+                        order_id=order_id,
+                        note=f"Refund pembatalan pesanan #{order_id}",
+                    )
+                    refunded_amount = order.total_smallest_unit
+
+                    # Mark the original payment as refunded
+                    await uow.payments.update_status(
+                        wallet_payment.id,
+                        PaymentStatus.REFUNDED,
+                    )
+
+            # Release stock for each item
+            items = await uow.order_items.list_by_order(order_id)
+            for item in items:
+                await uow.products.release_stock(item.product_id, item.quantity)
+
+            await uow.orders.update_status(order_id, OrderStatus.CANCELLED)
+            return True, refunded_amount
 
     # ── Expired reservation reaper ────────────────────────
 

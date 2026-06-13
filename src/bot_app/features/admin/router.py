@@ -11,6 +11,7 @@ Interaction flow (all via inline keyboards + FSM):
 3. Products:   list → detail → edit / toggle / delete / new (FSM)
 4. Orders:    list → detail → status transitions
 5. Broadcast: compose → preview → confirm / cancel
+6. Wallet:     panel → top-up / adjust (FSM)
 
 Callback-data schema (all ≤64 bytes):
 

@@ -19,6 +19,7 @@ async def cmd_start(message: types.Message) -> None:
         "dan lakukan pembayaran — semua di dalam Telegram.\n\n"
         "/catalog — Lihat produk\n"
         "/cart — Keranjang Anda\n"
+        "/wallet — Cek saldo\n"
         "/orders — Riwayat pesanan\n"
         "/help — Tampilkan bantuan"
     )
@@ -36,6 +37,7 @@ async def cmd_help(message: types.Message) -> None:
         "/echo <teks> — Mengulang teks",
         "/catalog — Lihat katalog produk",
         "/cart — Lihat keranjang",
+        "/wallet — Cek saldo",
         "/orders — Riwayat pesanan Anda",
     ]
     if settings.admin_ids:

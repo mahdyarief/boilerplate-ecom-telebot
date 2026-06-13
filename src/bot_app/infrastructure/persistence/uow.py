@@ -24,6 +24,7 @@ from .repositories import (
     ProductImageRepository,
     ProductRepository,
     UserRepository,
+    WalletRepository,
 )
 
 
@@ -46,6 +47,9 @@ class UnitOfWork:
     * ``uow.orders`` → :class:`OrderRepository`
     * ``uow.order_items`` → :class:`OrderItemRepository`
     * ``uow.payments`` → :class:`PaymentRepository`
+    * ``uow.coupons``   → :class:`CouponRepository`
+    * ``uow.product_images`` → :class:`ProductImageRepository`
+    * ``uow.wallets``   → :class:`WalletRepository`
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -67,6 +71,7 @@ class UnitOfWork:
             payments=PaymentRepository(self._session),
             coupons=CouponRepository(self._session),
             product_images=ProductImageRepository(self._session),
+            wallets=WalletRepository(self._session),
         )
         return self
 
@@ -144,3 +149,9 @@ class UnitOfWork:
         if self._repos is None:
             raise RuntimeError("UnitOfWork is not active")
         return self._repos.product_images
+
+    @property
+    def wallets(self) -> WalletRepository:
+        if self._repos is None:
+            raise RuntimeError("UnitOfWork is not active")
+        return self._repos.wallets
